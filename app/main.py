@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.db import engine, Base
-from app.routers import models
+from app.routers import models, runs, losses
 import asyncio
 import logging
 
@@ -34,3 +34,5 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(models.router)
+app.include_router(runs.router)
+app.include_router(losses.router)
