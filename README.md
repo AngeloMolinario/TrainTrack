@@ -1,10 +1,10 @@
-# 🧠 ML Training Monitor
+# 🚂 TrainTrack
 
-A full-stack web application for **monitoring machine learning experiments** in real-time. Track training runs, visualize loss curves and metrics, and compare experiments side by side.
+A lightweight experiment tracker for machine learning — log, visualize and compare training runs in real-time.
 
 ## What it does
 
-ML Training Monitor provides a REST API to log training experiments and a web dashboard to visualize them. During model training, you send loss and metric values to the API at each step. The frontend dashboard displays live-updating charts, highlights min/max values, and allows multi-run comparison — all organized by project and model.
+TrainTrack provides a REST API to log training experiments and a web dashboard to visualize them. During model training, you send loss and metric values to the API at each step. The frontend dashboard displays live-updating charts, highlights min/max values, and allows multi-run comparison — all organized by project and model.
 
 ## Tech Stack
 
@@ -21,7 +21,7 @@ ML Training Monitor provides a REST API to log training experiments and a web da
 ## Getting Started
 
 ### Run with Docker Compose
-
+To start the server with the api go into the server folder and run the Docker compose
 ```bash
 docker compose up --build
 ```
@@ -127,26 +127,3 @@ curl -X POST http://localhost:8000/metric/ \
 
 Available metrics: `accuracy`, `f1-score`, `recall`, `precision`, `balanced accuracy`, `mse`, `mae`
 
-## Project Structure
-
-```
-Monitor/
-├── app/                  # Backend (FastAPI)
-│   ├── main.py           # Application entry point
-│   ├── db.py             # Database configuration
-│   ├── models.py         # SQLAlchemy models
-│   ├── schemas.py        # Pydantic schemas
-│   ├── enums/            # Enum definitions
-│   └── routers/          # API route handlers
-├── frontend/             # Frontend (static site)
-│   ├── index.html        # Dashboard homepage
-│   ├── model.html        # Model detail page
-│   ├── run.html          # Run detail with charts
-│   ├── compare.html      # Multi-run comparison
-│   ├── styles.css        # Design system
-│   ├── api.js            # API client & utilities
-│   └── charts.js         # Chart.js helpers
-├── docker-compose.yml
-├── Dockerfile
-└── requirements.txt
-```
