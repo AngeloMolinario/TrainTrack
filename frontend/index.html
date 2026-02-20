@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="ML Training Monitor — Track and visualize your machine learning experiments" />
+  <title>ML Monitor — Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+</head>
+
+<body>
+  <div class="page-wrapper">
+    <div id="navbar-slot"></div>
+
+    <!-- Hero Section -->
+    <div class="hero fade-in">
+      <h1 class="hero-title">
+        <span class="gradient-text">Machine Learning</span><br />Training Monitor
+      </h1>
+      <p class="hero-subtitle">
+        Track experiments, visualize loss curves and metrics in real-time, and compare runs side by side.
+      </p>
+      <div class="hero-stats" id="hero-stats">
+        <div class="hero-stat">
+          <div class="hero-stat-value" id="stat-projects">—</div>
+          <div class="hero-stat-label">Projects</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-stat-value" id="stat-models">—</div>
+          <div class="hero-stat-label">Models</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-stat-value" id="stat-runs">—</div>
+          <div class="hero-stat-label">Total Runs</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div id="content">
+      <div class="loading-spinner">
+        <div class="spinner"></div>
+        <span>Loading models...</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script>
+    document.getElementById('navbar-slot').innerHTML = buildNavbar('home');
+
+    const content = document.getElementById('content');
+
+    async function loadModels() {
+      try {
+        const models = await api.getModels();
+
+        if (!models || models.length === 0) {
+          document.getElementById('stat-models').textContent = '0';
+          document.getElementById('stat-projects').textContent = '0';
+          document.getElementById('stat-runs').textContent = '0';
+          content.innerHTML = `
+            <div class="empty-state">
+              ${icons.layers}
+              <p>No models registered yet.</p>
+              <p class="text-muted" style="margin-top:8px;font-size:0.8125rem;">Use the API to register your first model.</p>
+            </div>`;
+          return;
+        }
+
+        // Group by project
+        const grouped = {};
+        models.forEach(m => {
+          const proj = m.project_name || 'Uncategorized';
+          if (!grouped[proj]) grouped[proj] = [];
+          grouped[proj].push(m);
+        });
+
+        // Fetch runs for all models in parallel
+        const runsPerModel = {};
+        await Promise.all(models.map(async (m) => {
+          try {
+            const runs = await api.getRunsByModel(m.id);
+            runsPerModel[m.id] = runs || [];
+          } catch (e) { runsPerModel[m.id] = []; }
+        }));
+
+        // Calculate total runs
+        let totalRuns = 0;
+        Object.values(runsPerModel).forEach(runs => totalRuns += runs.length);
+
+        // Update hero stats
+        document.getElementById('stat-projects').textContent = Object.keys(grouped).length;
+        document.getElementById('stat-models').textContent = models.length;
+        document.getElementById('stat-runs').textContent = totalRuns;
+
+        let html = '';
+        let groupIdx = 0;
+        for (const [project, projectModels] of Object.entries(grouped)) {
+          // Count total project runs
+          let projectRunCount = 0;
+          let projectRunningCount = 0;
+          projectModels.forEach(m => {
+            const runs = runsPerModel[m.id] || [];
+            projectRunCount += runs.length;
+            projectRunningCount += runs.filter(r => r.status === 'running').length;
+          });
+
+          const statsText = [
+            `${projectModels.length} model${projectModels.length > 1 ? 's' : ''}`,
+            `${projectRunCount} run${projectRunCount !== 1 ? 's' : ''}`,
+            projectRunningCount > 0 ? `${projectRunningCount} running` : null,
+          ].filter(Boolean).join(' · ');
+
+          html += `
+            <div class="project-group fade-in stagger-${Math.min(groupIdx + 1, 6)}" id="group-${groupIdx}">
+              <div class="project-group-header" data-group="group-${groupIdx}">
+                <div class="project-group-icon">${icons.folder}</div>
+                <div class="project-group-info">
+                  <div class="project-group-title">${project}</div>
+                  <div class="project-group-stats">${statsText}</div>
+                </div>
+                <span class="project-group-chevron">${icons.chevron}</span>
+              </div>
+              <div class="project-group-body">
+                <div class="cards-grid">
+                  ${projectModels.map(m => {
+            const runs = runsPerModel[m.id] || [];
+            const runCount = runs.length;
+            const running = runs.filter(r => r.status === 'running').length;
+            const completed = runs.filter(r => r.status === 'completed').length;
+            const failed = runs.filter(r => r.status === 'failed').length;
+            const latestRun = runs.length > 0 ? runs.sort((a, b) => new Date(b.started_at) - new Date(a.started_at))[0] : null;
+
+            let statusHtml = '';
+            if (latestRun) {
+              statusHtml = `<span class="model-card-stat">${icons.clock} Latest: <span class="status-badge ${getStatusClass(latestRun.status)}" style="font-size:0.625rem;padding:1px 8px;">${latestRun.status}</span></span>`;
+            }
+
+            return `
+                    <a href="model.html?id=${m.id}&name=${encodeURIComponent(m.name)}&project=${encodeURIComponent(m.project_name)}" class="model-card">
+                      <div class="model-card-top">
+                        <div class="model-card-icon">${icons.brain}</div>
+                        <div>
+                          <div class="model-card-name">${m.name}</div>
+                          <div class="model-card-id">${shortId(m.id)}</div>
+                        </div>
+                      </div>
+                      <div class="model-card-stats">
+                        <span class="model-card-stat">${icons.activity} <span class="stat-value">${runCount}</span> run${runCount !== 1 ? 's' : ''}</span>
+                        ${running > 0 ? `<span class="model-card-stat" style="color:var(--status-running);">● ${running} running</span>` : ''}
+                        ${completed > 0 ? `<span class="model-card-stat" style="color:var(--status-completed);">● ${completed} done</span>` : ''}
+                        ${failed > 0 ? `<span class="model-card-stat" style="color:var(--status-failed);">● ${failed} failed</span>` : ''}
+                      </div>
+                    </a>`;
+          }).join('')}
+                </div>
+              </div>
+            </div>`;
+          groupIdx++;
+        }
+
+        content.innerHTML = html;
+
+        // Wire up collapsible project groups
+        content.querySelectorAll('.project-group-header').forEach(header => {
+          header.addEventListener('click', () => {
+            const group = document.getElementById(header.dataset.group);
+            group.classList.toggle('collapsed');
+          });
+        });
+      } catch (err) {
+        content.innerHTML = `
+          <div class="empty-state">
+            <p style="color: var(--status-failed);">Failed to load models</p>
+            <p class="text-muted" style="margin-top:8px;font-size:0.8125rem;">${err.message}</p>
+            <button class="btn btn-secondary mt-lg" onclick="loadModels()">Retry</button>
+          </div>`;
+      }
+    }
+
+    loadModels();
+  </script>
+</body>
+
+</html>

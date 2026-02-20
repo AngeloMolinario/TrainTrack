@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="ML Training Monitor — Compare multiple experiment runs" />
+    <title>ML Monitor — Compare Runs</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+</head>
+
+<body>
+    <div class="page-wrapper">
+        <div id="navbar-slot"></div>
+
+        <!-- Breadcrumbs -->
+        <div class="breadcrumbs">
+            <a href="index.html">Home</a>
+            <span class="separator">›</span>
+            <a href="#" id="breadcrumb-model-link">Model</a>
+            <span class="separator">›</span>
+            <span class="current">Compare Runs</span>
+        </div>
+
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title"><span class="gradient-text">Compare</span> Runs</h1>
+            <p class="page-subtitle" id="compare-subtitle">Overlayed charts for selected experiments</p>
+        </div>
+
+        <!-- Runs Legend -->
+        <div class="compare-toolbar" id="runs-summary">
+            <div class="compare-toolbar-info" id="runs-legend"></div>
+            <div id="compare-polling-status"></div>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="toolbar-row">
+            <div class="toolbar-left">
+                <div class="toggle-group">
+                    <span class="toggle-label">View:</span>
+                    <div class="toggle-buttons">
+                        <button class="toggle-btn active" data-view="tabs">Tabs</button>
+                        <button class="toggle-btn" data-view="scroll">Scroll</button>
+                    </div>
+                </div>
+            </div>
+            <div class="toolbar-right">
+                <label class="checkbox-control">
+                    <input type="checkbox" id="show-min" /> Show Min
+                </label>
+                <label class="checkbox-control">
+                    <input type="checkbox" id="show-max" /> Show Max
+                </label>
+            </div>
+        </div>
+
+        <!-- Charts Area -->
+        <div id="charts-area">
+            <div class="loading-spinner">
+                <div class="spinner"></div><span>Loading comparison data...</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="api.js"></script>
+    <script src="charts.js"></script>
+    <script>
+        document.getElementById('navbar-slot').innerHTML = buildNavbar('');
+
+        const runIdsParam = getQueryParam('runs') || '';
+        const modelName = getQueryParam('model') || 'Model';
+        const projectName = getQueryParam('project') || '';
+        const modelId = getQueryParam('model_id') || '';
+        const runIds = runIdsParam.split(',').filter(Boolean);
+
+        // Breadcrumbs
+        const modelLink = document.getElementById('breadcrumb-model-link');
+        modelLink.textContent = modelName;
+        modelLink.href = `model.html?id=${modelId}&name=${encodeURIComponent(modelName)}&project=${encodeURIComponent(projectName)}`;
+        document.getElementById('compare-subtitle').textContent = `${runIds.length} experiments · ${modelName}`;
+        document.title = `ML Monitor — Compare ${runIds.length} Runs`;
+
+        // State
+        let runsLossData = {};
+        let runsMetricData = {};
+        let runStatuses = {};
+        let charts = {};
+        let viewMode = 'tabs';
+        let activeTab = 'loss';
+        let showMin = false;
+        let showMax = false;
+        const polling = new PollingManager(3000);
+
+        // ── Toolbar handlers ──────────────────────
+
+        document.querySelectorAll('.toggle-btn[data-view]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.toggle-btn[data-view]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                viewMode = btn.dataset.view;
+                rebuildAllCharts();
+            });
+        });
+
+        document.getElementById('show-min').addEventListener('change', (e) => { showMin = e.target.checked; rebuildAllCharts(); });
+        document.getElementById('show-max').addEventListener('change', (e) => { showMax = e.target.checked; rebuildAllCharts(); });
+
+        if (runIds.length < 2) {
+            document.getElementById('charts-area').innerHTML = '<div class="empty-state"><p>Select at least 2 runs to compare.</p></div>';
+        } else {
+            init();
+        }
+
+        async function init() {
+            buildLegend();
+            const hasRunning = await fetchAllData();
+            if (hasRunning) {
+                document.getElementById('compare-polling-status').innerHTML =
+                    '<span class="polling-indicator"><span class="polling-dot"></span> Live</span>';
+                polling.start(() => fetchAllData());
+            }
+        }
+
+        function buildLegend() {
+            document.getElementById('runs-legend').innerHTML = runIds.map((id, i) => {
+                const color = RUN_COLORS[i % RUN_COLORS.length].border;
+                return `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:16px;">
+          <span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;"></span>
+          <span style="font-family:monospace;font-size:0.8125rem;">Run ${shortId(id)}</span>
+        </span>`;
+            }).join('');
+        }
+
+        async function fetchAllData() {
+            let hasRunning = false;
+            try {
+                const results = await Promise.all(runIds.map(async (id) => {
+                    const [losses, metrics] = await Promise.all([api.getLosses(id), api.getMetrics(id)]);
+                    return { id, losses, metrics };
+                }));
+
+                try {
+                    const runs = await api.getRunsByModel(modelId);
+                    runs.forEach(r => { runStatuses[r.id] = r.status; });
+                } catch (e) { /* ignore */ }
+
+                // Reset data
+                runsLossData = {};
+                runsMetricData = {};
+
+                results.forEach(r => {
+                    runsLossData[r.id] = { data: r.losses, label: `Run ${shortId(r.id)}` };
+                    const metricNames = [...new Set(r.metrics.map(m => m.metric_name))];
+                    metricNames.forEach(name => {
+                        if (!runsMetricData[name]) runsMetricData[name] = {};
+                        runsMetricData[name][r.id] = {
+                            data: r.metrics.filter(m => m.metric_name === name),
+                            label: `Run ${shortId(r.id)}`,
+                        };
+                    });
+                });
+
+                runIds.forEach(id => { if (runStatuses[id] === 'running') hasRunning = true; });
+
+                rebuildAllCharts();
+
+                if (!hasRunning && polling.timers.length > 0) {
+                    polling.stopAll();
+                    document.getElementById('compare-polling-status').innerHTML =
+                        '<span class="status-badge completed">All Completed</span>';
+                }
+            } catch (err) { console.error('Error fetching comparison data:', err); }
+            return hasRunning;
+        }
+
+        // ── Chart Rendering ───────────────────────
+
+        function getAllTabKeys() {
+            const tabs = ['loss'];
+            Object.keys(runsMetricData).forEach(n => tabs.push(n));
+            return tabs;
+        }
+
+        function destroyAllCharts() {
+            Object.values(charts).forEach(c => { if (c) c.destroy(); });
+            charts = {};
+        }
+
+        function rebuildAllCharts() {
+            destroyAllCharts();
+            const area = document.getElementById('charts-area');
+            const tabKeys = getAllTabKeys();
+
+            if (tabKeys.length === 0) {
+                area.innerHTML = '<div class="empty-state"><p>No data available yet.</p></div>';
+                return;
+            }
+
+            if (viewMode === 'tabs') {
+                renderTabsView(area, tabKeys);
+            } else {
+                renderScrollView(area, tabKeys);
+            }
+        }
+
+        function renderTabsView(area, tabKeys) {
+            if (!tabKeys.includes(activeTab)) activeTab = tabKeys[0];
+
+            let html = '<div class="tabs-container"><div class="tabs-header">';
+            tabKeys.forEach(k => {
+                html += `<button class="tab-btn ${k === activeTab ? 'active' : ''}" data-tab="${k}">${k === 'loss' ? 'Loss' : k}</button>`;
+            });
+            html += '</div>';
+            tabKeys.forEach(k => {
+                html += `<div class="tab-panel ${k === activeTab ? 'active' : ''}" id="tab-${k}">
+          <div class="chart-container"><div class="charts-row single"><div class="chart-wrapper compact"><canvas id="chart-${k}"></canvas></div></div></div>
+        </div>`;
+            });
+            html += '</div>';
+            area.innerHTML = html;
+
+            area.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    activeTab = btn.dataset.tab;
+                    area.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    area.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                    document.getElementById(`tab-${activeTab}`).classList.add('active');
+                    destroyAllCharts();
+                    renderCompChart(activeTab);
+                });
+            });
+
+            renderCompChart(activeTab);
+        }
+
+        function renderScrollView(area, tabKeys) {
+            let html = '';
+            tabKeys.forEach(k => {
+                html += `<div class="chart-section">
+          <div class="chart-section-header"><h2 class="chart-section-title">${k === 'loss' ? 'Loss' : k}</h2></div>
+          <div class="chart-container"><div class="charts-row single"><div class="chart-wrapper"><canvas id="chart-${k}"></canvas></div></div></div>
+        </div>`;
+            });
+            area.innerHTML = html;
+            tabKeys.forEach(k => renderCompChart(k));
+        }
+
+        function renderCompChart(key) {
+            const canvas = document.getElementById(`chart-${key}`);
+            if (!canvas) return;
+
+            const dataSource = key === 'loss' ? runsLossData : (runsMetricData[key] || {});
+            const title = key === 'loss' ? 'Loss — All Runs' : `${key} — All Runs`;
+
+            charts[key] = createComparisonChart(canvas, dataSource, null, title, null, showMin, showMax);
+
+            // Click to fullscreen
+            canvas.closest('.chart-wrapper').addEventListener('click', () => {
+                openFullscreenChart((fsCanvas) =>
+                    createComparisonChart(fsCanvas, dataSource, null, title, null, showMin, showMax)
+                );
+            });
+        }
+
+        window.addEventListener('beforeunload', () => polling.stopAll());
+    </script>
+</body>
+
+</html>

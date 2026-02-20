@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="ML Training Monitor — Experiment run detail with live charts" />
+    <title>ML Monitor — Run Detail</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+</head>
+
+<body>
+    <div class="page-wrapper">
+        <div id="navbar-slot"></div>
+
+        <!-- Breadcrumbs -->
+        <div class="breadcrumbs">
+            <a href="index.html">Home</a>
+            <span class="separator">›</span>
+            <a href="#" id="breadcrumb-model-link">Model</a>
+            <span class="separator">›</span>
+            <span class="current" id="breadcrumb-run">Run</span>
+        </div>
+
+        <!-- Page Header -->
+        <div class="page-header">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="page-title"><span class="gradient-text" id="run-title">Experiment Run</span></h1>
+                    <p class="page-subtitle" id="run-subtitle"></p>
+                </div>
+                <div id="polling-status"></div>
+            </div>
+        </div>
+
+        <!-- Run Info Card -->
+        <div class="chart-container mb-lg fade-in" id="run-info-card">
+            <div class="run-info-grid" id="run-info"></div>
+            <div class="hyperparams-list" id="run-hyperparams"></div>
+        </div>
+
+        <!-- Toolbar: View mode + Show Min/Max -->
+        <div class="toolbar-row" id="chart-toolbar">
+            <div class="toolbar-left">
+                <div class="toggle-group">
+                    <span class="toggle-label">View:</span>
+                    <div class="toggle-buttons">
+                        <button class="toggle-btn active" data-view="tabs">Tabs</button>
+                        <button class="toggle-btn" data-view="scroll">Scroll</button>
+                    </div>
+                </div>
+                <div class="toggle-group">
+                    <span class="toggle-label">Mode:</span>
+                    <div class="toggle-buttons">
+                        <button class="toggle-btn active" data-chartmode="overlay">Overlay</button>
+                        <button class="toggle-btn" data-chartmode="split">Split</button>
+                    </div>
+                </div>
+            </div>
+            <div class="toolbar-right">
+                <label class="checkbox-control">
+                    <input type="checkbox" id="show-min" /> Show Min
+                </label>
+                <label class="checkbox-control">
+                    <input type="checkbox" id="show-max" /> Show Max
+                </label>
+            </div>
+        </div>
+
+        <!-- Charts Area -->
+        <div id="charts-area">
+            <div class="loading-spinner">
+                <div class="spinner"></div><span>Loading training data...</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="api.js"></script>
+    <script src="charts.js"></script>
+    <script>
+        document.getElementById('navbar-slot').innerHTML = buildNavbar('');
+
+        const runId = getQueryParam('id');
+        const modelName = getQueryParam('model') || 'Model';
+        const projectName = getQueryParam('project') || '';
+        const modelId = getQueryParam('model_id') || '';
+
+        // Setup breadcrumbs
+        const modelLink = document.getElementById('breadcrumb-model-link');
+        modelLink.textContent = modelName;
+        modelLink.href = `model.html?id=${modelId}&name=${encodeURIComponent(modelName)}&project=${encodeURIComponent(projectName)}`;
+        document.getElementById('breadcrumb-run').textContent = `Run ${shortId(runId)}`;
+        document.getElementById('run-title').textContent = `Run ${shortId(runId)}`;
+        document.title = `ML Monitor — Run ${shortId(runId)}`;
+
+        // State
+        let currentLossData = [];
+        let currentMetricsData = [];
+        let currentRunStatus = 'running';
+        let chartMode = 'overlay';  // 'overlay' | 'split'
+        let viewMode = 'tabs';      // 'tabs' | 'scroll'
+        let showMin = false;
+        let showMax = false;
+        let activeTab = 'loss';
+        let charts = {};         // { key: Chart instance }
+        const polling = new PollingManager(3000);
+
+        if (!runId) {
+            document.getElementById('charts-area').innerHTML = '<div class="empty-state"><p>No run ID provided.</p></div>';
+        } else {
+            init();
+        }
+
+        // ── Toolbar Handlers ──────────────────────
+
+        // View mode toggle
+        document.querySelectorAll('.toggle-btn[data-view]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.toggle-btn[data-view]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                viewMode = btn.dataset.view;
+                rebuildAllCharts();
+            });
+        });
+
+        // Chart mode toggle
+        document.querySelectorAll('.toggle-btn[data-chartmode]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.toggle-btn[data-chartmode]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                chartMode = btn.dataset.chartmode;
+                rebuildAllCharts();
+            });
+        });
+
+        // Min/Max checkboxes
+        document.getElementById('show-min').addEventListener('change', (e) => {
+            showMin = e.target.checked;
+            rebuildAllCharts();
+        });
+
+        document.getElementById('show-max').addEventListener('change', (e) => {
+            showMax = e.target.checked;
+            rebuildAllCharts();
+        });
+
+        // ── Init ──────────────────────────────────
+
+        async function init() {
+            try {
+                const runs = await api.getRunsByModel(modelId);
+                const run = runs.find(r => r.id === runId);
+                if (run) {
+                    renderRunInfo(run);
+                    currentRunStatus = run.status;
+                }
+            } catch (e) { console.warn('Could not load run info:', e); }
+
+            if (currentRunStatus === 'running') {
+                document.getElementById('polling-status').innerHTML =
+                    '<span class="polling-indicator"><span class="polling-dot"></span> Live</span>';
+                polling.start(() => fetchAllData());
+            } else {
+                document.getElementById('polling-status').innerHTML =
+                    `<span class="status-badge ${getStatusClass(currentRunStatus)}">${currentRunStatus}</span>`;
+                fetchAllData();
+            }
+        }
+
+        function renderRunInfo(run) {
+            document.getElementById('run-subtitle').textContent = `${modelName} · ${projectName}`;
+            document.getElementById('run-info').innerHTML = `
+        <div class="run-info-item">
+          <span class="run-info-label">Status</span>
+          <span class="run-info-value"><span class="status-badge ${getStatusClass(run.status)}">${run.status}</span></span>
+        </div>
+        <div class="run-info-item">
+          <span class="run-info-label">Started</span>
+          <span class="run-info-value">${formatDate(run.started_at)}</span>
+        </div>
+        <div class="run-info-item">
+          <span class="run-info-label">Finished</span>
+          <span class="run-info-value">${formatDate(run.finished_at)}</span>
+        </div>
+        <div class="run-info-item">
+          <span class="run-info-label">Run ID</span>
+          <span class="run-info-value font-mono" style="font-size:0.75rem;">${run.id}</span>
+        </div>`;
+
+            const hpContainer = document.getElementById('run-hyperparams');
+            if (run.hyperparameters && Object.keys(run.hyperparameters).length > 0) {
+                hpContainer.innerHTML = Object.entries(run.hyperparameters)
+                    .map(([k, v]) => `<span class="hyperparam-tag"><span class="key">${k}:</span> ${v}</span>`)
+                    .join('');
+            } else {
+                hpContainer.innerHTML = '<span class="text-muted" style="font-size:0.75rem;">No hyperparameters</span>';
+            }
+        }
+
+        // ── Fetch Data ────────────────────────────
+
+        async function fetchAllData() {
+            try {
+                const [losses, metrics] = await Promise.all([api.getLosses(runId), api.getMetrics(runId)]);
+                currentLossData = losses;
+                currentMetricsData = metrics;
+                rebuildAllCharts();
+
+                // Check if run finished
+                if (currentRunStatus === 'running') {
+                    try {
+                        const runs = await api.getRunsByModel(modelId);
+                        const run = runs.find(r => r.id === runId);
+                        if (run && run.status !== 'running') {
+                            currentRunStatus = run.status;
+                            polling.stopAll();
+                            document.getElementById('polling-status').innerHTML =
+                                `<span class="status-badge ${getStatusClass(currentRunStatus)}">${currentRunStatus}</span>`;
+                            renderRunInfo(run);
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+            } catch (err) { console.error('Error fetching data:', err); }
+        }
+
+        // ── Build Charts ──────────────────────────
+
+        function getMetricNames() {
+            return [...new Set(currentMetricsData.map(m => m.metric_name))];
+        }
+
+        function getAllTabKeys() {
+            const tabs = ['loss'];
+            getMetricNames().forEach(n => tabs.push(n));
+            return tabs;
+        }
+
+        function destroyAllCharts() {
+            Object.values(charts).forEach(c => { if (c) c.destroy(); });
+            charts = {};
+        }
+
+        function rebuildAllCharts() {
+            destroyAllCharts();
+            const area = document.getElementById('charts-area');
+            const tabKeys = getAllTabKeys();
+
+            if (tabKeys.length === 0 || (currentLossData.length === 0 && currentMetricsData.length === 0)) {
+                area.innerHTML = '<div class="empty-state"><p>No data available yet.</p></div>';
+                return;
+            }
+
+            if (viewMode === 'tabs') {
+                renderTabsView(area, tabKeys);
+            } else {
+                renderScrollView(area, tabKeys);
+            }
+        }
+
+        // ── Tabs View ─────────────────────────────
+
+        function renderTabsView(area, tabKeys) {
+            // Keep active tab if still valid
+            if (!tabKeys.includes(activeTab)) activeTab = tabKeys[0];
+
+            let tabsHtml = '<div class="tabs-container"><div class="tabs-header">';
+            tabKeys.forEach(key => {
+                const label = key === 'loss' ? 'Loss' : key;
+                tabsHtml += `<button class="tab-btn ${key === activeTab ? 'active' : ''}" data-tab="${key}">${label}</button>`;
+            });
+            tabsHtml += '</div>';
+
+            tabKeys.forEach(key => {
+                tabsHtml += `<div class="tab-panel ${key === activeTab ? 'active' : ''}" id="tab-${key}">
+          <div class="chart-container">
+            ${chartContainerHtml(key)}
+          </div>
+        </div>`;
+            });
+            tabsHtml += '</div>';
+
+            area.innerHTML = tabsHtml;
+
+            // Wire up tabs
+            area.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    activeTab = btn.dataset.tab;
+                    area.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    area.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                    document.getElementById(`tab-${activeTab}`).classList.add('active');
+                    // Rebuild chart for this tab (canvas might need re-render)
+                    destroyAllCharts();
+                    renderChartForKey(activeTab);
+                });
+            });
+
+            // Render only the active tab chart
+            renderChartForKey(activeTab);
+        }
+
+        // ── Scroll View ───────────────────────────
+
+        function renderScrollView(area, tabKeys) {
+            let html = '';
+            tabKeys.forEach(key => {
+                const label = key === 'loss' ? 'Loss' : key;
+                html += `
+          <div class="chart-section">
+            <div class="chart-section-header">
+              <h2 class="chart-section-title">${label}</h2>
+            </div>
+            <div class="chart-container">
+              ${chartContainerHtml(key)}
+            </div>
+          </div>`;
+            });
+            area.innerHTML = html;
+
+            // Render all charts
+            tabKeys.forEach(key => renderChartForKey(key));
+        }
+
+        // ── Chart Container HTML ──────────────────
+
+        function chartContainerHtml(key) {
+            const isCompact = viewMode === 'tabs' && chartMode === 'overlay';
+            const compactClass = isCompact ? ' compact' : '';
+            if (chartMode === 'overlay') {
+                return `<div class="charts-row single"><div class="chart-wrapper${compactClass}" data-chart-key="${key}"><canvas id="chart-${key}-overlay"></canvas></div></div>`;
+            } else {
+                return `<div class="charts-row">
+          <div class="chart-wrapper" data-chart-key="${key}-train"><canvas id="chart-${key}-train"></canvas></div>
+          <div class="chart-wrapper" data-chart-key="${key}-val"><canvas id="chart-${key}-val"></canvas></div>
+        </div>`;
+            }
+        }
+
+        // ── Render Chart for Key ──────────────────
+
+        function renderChartForKey(key) {
+            const data = key === 'loss' ? currentLossData : currentMetricsData.filter(m => m.metric_name === key);
+            const label = key === 'loss' ? 'Loss' : key;
+
+            if (data.length === 0) return;
+
+            if (chartMode === 'overlay') {
+                const canvas = document.getElementById(`chart-${key}-overlay`);
+                if (canvas) {
+                    charts[key] = createOverlayChart(canvas, data, `${label} — Train & Validation`, null, showMin, showMax);
+                    // Click to fullscreen
+                    canvas.closest('.chart-wrapper').addEventListener('click', () => {
+                        openFullscreenChart((fsCanvas) =>
+                            createOverlayChart(fsCanvas, data, `${label} — Train & Validation`, null, showMin, showMax)
+                        );
+                    });
+                }
+            } else {
+                const trainCanvas = document.getElementById(`chart-${key}-train`);
+                const valCanvas = document.getElementById(`chart-${key}-val`);
+                if (trainCanvas) {
+                    charts[`${key}-train`] = createSingleSplitChart(trainCanvas, data, 'train', `${label} — Train`, null, showMin, showMax);
+                    trainCanvas.closest('.chart-wrapper').addEventListener('click', () => {
+                        openFullscreenChart((fsCanvas) =>
+                            createSingleSplitChart(fsCanvas, data, 'train', `${label} — Train`, null, showMin, showMax)
+                        );
+                    });
+                }
+                if (valCanvas) {
+                    charts[`${key}-val`] = createSingleSplitChart(valCanvas, data, 'validation', `${label} — Validation`, null, showMin, showMax);
+                    valCanvas.closest('.chart-wrapper').addEventListener('click', () => {
+                        openFullscreenChart((fsCanvas) =>
+                            createSingleSplitChart(fsCanvas, data, 'validation', `${label} — Validation`, null, showMin, showMax)
+                        );
+                    });
+                }
+            }
+        }
+
+        // Cleanup
+        window.addEventListener('beforeunload', () => polling.stopAll());
+    </script>
+</body>
+
+</html>

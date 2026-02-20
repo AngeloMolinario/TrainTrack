@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="ML Training Monitor — Model experiments overview" />
+    <title>ML Monitor — Model Detail</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+</head>
+
+<body>
+    <div class="page-wrapper">
+        <div id="navbar-slot"></div>
+
+        <!-- Breadcrumbs -->
+        <div class="breadcrumbs">
+            <a href="index.html">Home</a>
+            <span class="separator">›</span>
+            <span class="current" id="breadcrumb-model">Model</span>
+        </div>
+
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title"><span class="gradient-text" id="model-name">Loading...</span></h1>
+            <p class="page-subtitle" id="model-project"></p>
+        </div>
+
+        <!-- Model Stats Bar -->
+        <div class="toolbar-row" id="model-stats-bar" style="display:none;">
+            <div class="toolbar-left" id="model-run-stats"></div>
+            <div class="toolbar-right" id="model-status-summary"></div>
+        </div>
+
+        <!-- Compare Toolbar -->
+        <div class="compare-toolbar" id="compare-toolbar" style="display:none;">
+            <div class="compare-toolbar-info">
+                <span><span class="compare-toolbar-count" id="compare-count">0</span> runs selected</span>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-secondary btn-sm" id="compare-clear">Clear</button>
+                <button class="btn btn-primary btn-sm" id="compare-go">Compare Runs</button>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div id="content">
+            <div class="loading-spinner">
+                <div class="spinner"></div><span>Loading experiments...</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="api.js"></script>
+    <script>
+        document.getElementById('navbar-slot').innerHTML = buildNavbar('');
+
+        const content = document.getElementById('content');
+        const modelId = getQueryParam('id');
+        const modelName = getQueryParam('name') || 'Model';
+        const projectName = getQueryParam('project') || '';
+        const selectedRuns = new Set();
+
+        document.getElementById('model-name').textContent = modelName;
+        document.getElementById('model-project').textContent = projectName ? `Project: ${projectName}` : '';
+        document.getElementById('breadcrumb-model').textContent = modelName;
+        document.title = `ML Monitor — ${modelName}`;
+
+        if (!modelId) {
+            content.innerHTML = '<div class="empty-state"><p>No model ID provided.</p></div>';
+        } else {
+            loadRuns();
+        }
+
+        async function loadRuns() {
+            try {
+                const runs = await api.getRunsByModel(modelId);
+
+                if (!runs || runs.length === 0) {
+                    content.innerHTML = `
+            <div class="empty-state">
+              <p>No experiments found for this model.</p>
+              <p class="text-muted" style="margin-top:8px;font-size:0.8125rem;">Start a training run using the API.</p>
+            </div>`;
+                    return;
+                }
+
+                runs.sort((a, b) => new Date(b.started_at) - new Date(a.started_at));
+
+                // Model stats bar
+                const running = runs.filter(r => r.status === 'running').length;
+                const completed = runs.filter(r => r.status === 'completed').length;
+                const failed = runs.filter(r => r.status === 'failed').length;
+
+                const statsBar = document.getElementById('model-stats-bar');
+                statsBar.style.display = 'flex';
+                document.getElementById('model-run-stats').innerHTML = `
+                    <span style="font-size:0.875rem;color:var(--text-secondary);">${icons.activity} <strong style="color:var(--text-primary);">${runs.length}</strong> experiment${runs.length > 1 ? 's' : ''}</span>`;
+                document.getElementById('model-status-summary').innerHTML = [
+                    running > 0 ? `<span style="font-size:0.75rem;color:var(--status-running);">● ${running} running</span>` : '',
+                    completed > 0 ? `<span style="font-size:0.75rem;color:var(--status-completed);">● ${completed} completed</span>` : '',
+                    failed > 0 ? `<span style="font-size:0.75rem;color:var(--status-failed);">● ${failed} failed</span>` : '',
+                ].filter(Boolean).join('');
+
+                content.innerHTML = `<div class="cards-grid">${runs.map((r, i) => renderRunCard(r, i, runs.length)).join('')}</div>`;
+                attachRunCardListeners(runs);
+            } catch (err) {
+                content.innerHTML = `
+          <div class="empty-state">
+            <p style="color: var(--status-failed);">Failed to load experiments</p>
+            <p class="text-muted" style="margin-top:8px;font-size:0.8125rem;">${err.message}</p>
+            <button class="btn btn-secondary mt-lg" onclick="loadRuns()">Retry</button>
+          </div>`;
+            }
+        }
+
+        function renderRunCard(run, idx, total) {
+            const runNumber = total - idx;
+            const hpTags = run.hyperparameters
+                ? Object.entries(run.hyperparameters).map(([k, v]) =>
+                    `<span class="hyperparam-tag"><span class="key">${k}:</span> ${v}</span>`
+                ).join('')
+                : '<span class="text-muted" style="font-size:0.75rem;">No hyperparameters</span>';
+
+            // Duration
+            let duration = '—';
+            if (run.started_at) {
+                const start = new Date(run.started_at);
+                const end = run.finished_at ? new Date(run.finished_at) : new Date();
+                const diffMs = end - start;
+                const mins = Math.floor(diffMs / 60000);
+                const hours = Math.floor(mins / 60);
+                if (hours > 0) duration = `${hours}h ${mins % 60}m`;
+                else if (mins > 0) duration = `${mins}m`;
+                else duration = `${Math.floor(diffMs / 1000)}s`;
+                if (run.status === 'running') duration += ' (ongoing)';
+            }
+
+            return `
+        <div class="run-card fade-in stagger-${Math.min(idx + 1, 6)}" data-run-id="${run.id}">
+          <div class="run-card-header">
+            <div class="run-card-title">
+              <input type="checkbox" class="run-card-checkbox" data-run-id="${run.id}" title="Select for comparison" />
+              <span class="run-card-number">#${runNumber}</span>
+              <a href="run.html?id=${run.id}&model=${encodeURIComponent(modelName)}&project=${encodeURIComponent(projectName)}&model_id=${modelId}" class="run-card-id" title="View details">
+                Run ${shortId(run.id)}
+              </a>
+            </div>
+            <div class="run-card-actions">
+              <span class="status-badge ${getStatusClass(run.status)}">${run.status}</span>
+              <button class="btn-icon edit-hp-btn" data-run-id="${run.id}" title="Edit Hyperparameters">${icons.pencil}</button>
+            </div>
+          </div>
+          <div class="run-info-grid">
+            <div class="run-info-item">
+              <span class="run-info-label">Started</span>
+              <span class="run-info-value">${formatDate(run.started_at)}</span>
+            </div>
+            <div class="run-info-item">
+              <span class="run-info-label">Finished</span>
+              <span class="run-info-value">${formatDate(run.finished_at)}</span>
+            </div>
+            <div class="run-info-item">
+              <span class="run-info-label">Duration</span>
+              <span class="run-info-value">${duration}</span>
+            </div>
+          </div>
+          <div class="hyperparams-list">${hpTags}</div>
+        </div>`;
+        }
+
+        function attachRunCardListeners(runs) {
+            document.querySelectorAll('.run-card-checkbox').forEach(cb => {
+                cb.addEventListener('change', () => {
+                    if (cb.checked) selectedRuns.add(cb.dataset.runId);
+                    else selectedRuns.delete(cb.dataset.runId);
+                    updateCompareToolbar();
+                });
+            });
+
+            document.querySelectorAll('.edit-hp-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const runId = btn.dataset.runId;
+                    const run = runs.find(r => r.id === runId);
+                    openHyperparamModal(runId, run?.hyperparameters || {}, async (id, newParams) => {
+                        await api.updateHyperparameters(id, newParams);
+                        loadRuns();
+                    });
+                });
+            });
+        }
+
+        function updateCompareToolbar() {
+            const toolbar = document.getElementById('compare-toolbar');
+            const countEl = document.getElementById('compare-count');
+            if (selectedRuns.size > 0) {
+                toolbar.style.display = 'flex';
+                countEl.textContent = selectedRuns.size;
+            } else {
+                toolbar.style.display = 'none';
+            }
+        }
+
+        document.getElementById('compare-clear').addEventListener('click', () => {
+            selectedRuns.clear();
+            document.querySelectorAll('.run-card-checkbox').forEach(cb => cb.checked = false);
+            updateCompareToolbar();
+        });
+
+        document.getElementById('compare-go').addEventListener('click', () => {
+            if (selectedRuns.size < 2) { alert('Select at least 2 runs to compare.'); return; }
+            const ids = Array.from(selectedRuns).join(',');
+            window.location.href = `compare.html?runs=${ids}&model=${encodeURIComponent(modelName)}&project=${encodeURIComponent(projectName)}&model_id=${modelId}`;
+        });
+    </script>
+</body>
+
+</html>
