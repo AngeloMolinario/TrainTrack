@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey, PrimaryKeyConstraint, JSON
+from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey, PrimaryKeyConstraint, JSON, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -13,11 +13,13 @@ class Model(Base):
     __tablename__ = "models"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False)
     project_name = Column(String, nullable=False)
 
     runs = relationship("TrainingRun", back_populates="model", cascade="all, delete-orphan")
-
+    __table_args__ = (
+        UniqueConstraint("name", "project_name", name="uq_model_name_project"),
+    )
 
 class TrainingRun(Base):
     __tablename__ = "training_runs"

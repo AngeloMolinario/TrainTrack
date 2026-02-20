@@ -46,12 +46,12 @@ async def read_runs_by_project(project_name: str, db: AsyncSession = Depends(get
 
 
 @router.delete("/{run_id}")
-async def delete_run(run_ids: str, db: AsyncSession = Depends(get_db)):
-    ids = [UUID(r) for r in run_ids.split(",")]
+async def delete_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    ids = [UUID(r) for r in run_id.split(",")]
     result = delete(models.TrainingRun).where(models.TrainingRun.id.in_(ids))
-    await db.execute(result)
+    result = await db.execute(result)
     await db.commit()
-    return {"detail": "Run deleted"}
+    return {"detail": "Run deleted", "Affected row" : result.rowcount}
 
 @router.patch("/update_status")
 async def update_status(payload: schemas.RunStatusUpdate, db: AsyncSession = Depends(get_db)):
