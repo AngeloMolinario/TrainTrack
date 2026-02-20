@@ -8,7 +8,7 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 @router.post("/", response_model=schemas.ModelRead)
 async def create_model(model: schemas.ModelCreate, db: AsyncSession = Depends(get_db)):
-    model = models.Model(**model.dict())
+    model = models.Model(**model.model_dump())
     db.add(model)
     await db.commit()
     await db.refresh(model)

@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from uuid import UUID
 from datetime import datetime
 from typing import Optional, Dict, Literal, List
+from app.enums.enums import SplitEnum, StatusEnum, MetricEnum
 
 #############################################################
 ##                   SCHEMI PER MODELS                     ##
@@ -29,10 +30,14 @@ class RunCreate(BaseModel):
     model_id: UUID
     hyperparameters: Optional[Dict] = None
 
+class RunStatusUpdate(BaseModel):
+    run_id : UUID
+    new_status : StatusEnum
+
 class RunRead(BaseModel):
     id: UUID
     model_id: UUID
-    status: str
+    status: StatusEnum
     started_at: datetime
     finished_at: Optional[datetime]
     hyperparameters: Optional[Dict] = None
@@ -47,7 +52,7 @@ class RunRead(BaseModel):
 class LossCreate(BaseModel):
     run_id : UUID
     step: int
-    split: Literal["train", "validation"]
+    split: SplitEnum
     value: float
 
 class LossBatchCreate(BaseModel):
@@ -57,7 +62,7 @@ class LossBatchCreate(BaseModel):
 class LossRead(BaseModel):
     run_id: UUID
     step: int
-    split: str
+    split: SplitEnum
     timestamp: datetime
     value: float
 
@@ -71,8 +76,8 @@ class LossRead(BaseModel):
 class MetricCreate(BaseModel):
     run_id : UUID
     step: int
-    split: Literal["train", "validation"]
-    metric_name: str
+    split: SplitEnum
+    metric_name: MetricEnum
     value: float
 
 class MetricBatchCreate(BaseModel):
@@ -82,8 +87,8 @@ class MetricBatchCreate(BaseModel):
 class MetricRead(BaseModel):
     run_id: UUID
     step: int
-    split: str
-    metric_name: str
+    split: SplitEnum
+    metric_name: MetricEnum
     timestamp: datetime
     value: float
 

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from uuid import UUID
 from app.db import get_db
 from app import models, schemas
-import uuid
+from datetime import datetime, timezone
 
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -13,7 +13,6 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 @router.post("/", response_model=schemas.RunRead)
 async def create_run(run: schemas.RunCreate, db: AsyncSession = Depends(get_db)):
     run = models.TrainingRun(
-        id= uuid.uuid4(),
         model_id=run.model_id,
         hyperparameters=run.hyperparameters,
         status = "running"        
@@ -54,3 +53,16 @@ async def delete_run(run_ids: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"detail": "Run deleted"}
 
+@router.patch("/update_status")
+async def update_status(payload: schemas.RunStatusUpdate, db: AsyncSession = Depends(get_db)):
+    run_id = payload.run_id
+    new_status = payload.new_status
+    if new_status == 'completed':
+        stmt = (update(models.TrainingRun).where(models.TrainingRun.id==run_id)
+                .values(status=new_status)
+                .values(finished_at=datetime.now(timezone.utc)))
+    else:
+        stmt = update(models.TrainingRun).where(models.TrainingRun.id==run_id).values(status=new_status)
+    result = await db.execute(stmt)
+    await db.commit()
+    return {"rows_updated": result.rowcount}  

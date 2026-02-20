@@ -4,14 +4,10 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy import Enum, Index
-import enum
 
 from app.db import Base
+from app.enums.enums import StatusEnum, SplitEnum, MetricEnum
 
-
-class SplitEnum(str, enum.Enum):
-    train = "train"
-    validation = "validation"
 
 class Model(Base):
     __tablename__ = "models"
@@ -32,9 +28,8 @@ class TrainingRun(Base):
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
-    status = Column(String, nullable=False, default="running")  
+    status = Column(Enum(StatusEnum), nullable=False, default="running")  
     hyperparameters = Column(JSON)
-    # running, completed, failed
 
     model = relationship("Model", back_populates="runs")
 
@@ -47,7 +42,7 @@ class Loss(Base):
 
     run_id = Column(UUID(as_uuid=True), ForeignKey("training_runs.id"), nullable=False)
     step = Column(Integer, nullable=False)
-    split = Column(String, nullable=False)
+    split = Column(Enum(SplitEnum), nullable=False)
 
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     value = Column(Float, nullable=False)
@@ -64,8 +59,8 @@ class Metric(Base):
 
     run_id = Column(UUID(as_uuid=True), ForeignKey("training_runs.id"), nullable=False)
     step = Column(Integer, nullable=False)
-    split = Column(String, nullable=False)
-    metric_name = Column(String, nullable=False)
+    split = Column(Enum(SplitEnum), nullable=False)
+    metric_name = Column(Enum(MetricEnum), nullable=False)
 
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     value = Column(Float, nullable=False)
