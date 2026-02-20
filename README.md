@@ -1,4 +1,4 @@
-# 🚂 TrainTrack
+# TrainTrack
 
 A lightweight experiment tracker for machine learning — log, visualize and compare training runs in real-time.
 
